@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIST100 Teknik Tarayıcı</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <!-- TradingView Lightweight Charts -->
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- SheetJS: Excel export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- jsPDF: PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+    <!-- ===== HEADER ===== -->
+    <header class="header">
+        <div class="header-inner">
+            <div class="brand">
+                <span class="brand-icon">◈</span>
+                <div>
+                    <h1>BIST100 Scanner</h1>
+                    <p class="brand-sub">Teknik Analiz Tarayıcısı</p>
+                </div>
+            </div>
+
+            <!-- Zaman dilimi seçimi -->
+            <div class="controls">
+                <div class="interval-group">
+                    <button class="interval-btn active" data-interval="daily">Günlük</button>
+                    <button class="interval-btn" data-interval="weekly">Haftalık</button>
+                    <button class="interval-btn" data-interval="monthly">Aylık</button>
+                    <button class="interval-btn confluence-btn" data-interval="confluence" title="Haftalık ve Günlük grafikte aynı anda yüksek skor alan hisseler">
+                        ⚡ Confluence
+                    </button>
+                </div>
+
+                <!-- Export butonları (veriler gelince aktifleşir) -->
+                <div class="export-group" id="exportGroup" style="display:none">
+                    <button class="export-btn" onclick="exportExcel()" title="Excel olarak indir">
+                        📊 Excel
+                    </button>
+                    <button class="export-btn" onclick="exportPDF()" title="PDF olarak indir">
+                        📄 PDF
+                    </button>
+                </div>
+
+                <!-- Ayarlar butonu -->
+                <button class="settings-btn" onclick="toggleSettings()" title="API Ayarları">
+                    ⚙️
+                </button>
+
+                <!-- Tarama başlat butonu -->
+                <button class="scan-btn" id="scanBtn" onclick="startScan()">
+                    <span class="btn-icon">▶</span>
+                    <span class="btn-text">Tara</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- ===== DURUM ÇUBUĞU ===== -->
+    <div class="status-bar" id="statusBar" style="display:none">
+        <div class="status-inner">
+            <div class="spinner"></div>
+            <span id="statusText">BIST100 hisseleri taranıyor...</span>
+            <span class="status-note">Bu işlem ~1-2 dakika sürebilir</span>
+        </div>
+    </div>
+
+    <!-- ===== API FALLBACK UYARISI ===== -->
+    <div class="api-warning" id="apiWarning" style="display:none">
+        <div class="api-warning-inner">
+            <span>⚠️</span>
+            <span id="apiWarningText"></span>
+            <button onclick="document.getElementById('apiWarning').style.display='none'">✕</button>
+        </div>
+    </div>
+
+    <!-- ===== AYARLAR PANELİ ===== -->
+    <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()">
+        <div class="settings-panel" onclick="event.stopPropagation()">
+            <div class="settings-header">
+                <h3>⚙️ API Ayarları</h3>
+                <button class="modal-close" onclick="closeSettings()">✕</button>
+            </div>
+
+            <div class="settings-body">
+                <!-- API Seçimi -->
+                <div class="settings-group">
+                    <label class="settings-label">Veri Kaynağı</label>
+                    <div class="api-choice">
+                        <label class="api-option">
+                            <input type="radio" name="apiSource" value="yahoo" checked>
+                            <div class="api-option-body">
+                                <div class="api-option-title">Yahoo Finance</div>
+                                <div class="api-option-sub">Ücretsiz · 15 dk gecikmeli · Kayıt gerektirmez</div>
+                            </div>
+                        </label>
+                        <label class="api-option">
+                            <input type="radio" name="apiSource" value="twelvedata">
+                            <div class="api-option-body">
+                                <div class="api-option-title">Twelve Data</div>
+                                <div class="api-option-sub">Ücretsiz tier: 800 istek/gün · API key gerekli</div>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Twelve Data Key -->
+                <div class="settings-group" id="twelveKeyGroup" style="display:none">
+                    <label class="settings-label">
+                        Twelve Data API Key
+                        <a href="https://twelvedata.com/register" target="_blank" class="settings-link">
+                            Ücretsiz key al →
+                        </a>
+                    </label>
+                    <input type="text" id="twelveApiKey" class="settings-input"
+                           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                           oninput="saveSettings()">
+                    <div class="settings-hint">
+                        Key tarayıcınızda saklanır, sunucuya gönderilmez. Limit aşılırsa otomatik Yahoo'ya geçilir.
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-footer">
+                <div class="api-badge" id="currentApiBadge">Yahoo Finance aktif</div>
+                <button class="scan-btn" onclick="closeSettings()">Tamam</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== ÖZET KARTLAR ===== -->
+    <div class="summary-row" id="summaryRow" style="display:none">
+        <div class="summary-card">
+            <div class="summary-label">Taranan</div>
+            <div class="summary-value" id="totalCount">—</div>
+        </div>
+        <div class="summary-card highlight">
+            <div class="summary-label">100 Puan ✓</div>
+            <div class="summary-value green" id="allMetCount">—</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-label">70+ Puan</div>
+            <div class="summary-value yellow" id="fourPlusCount">—</div>
+        </div>
+        <div class="summary-card">
+            <div class="summary-label">Son Tarama</div>
+            <div class="summary-value small" id="lastScan">—</div>
+            <div id="cacheBadge" style="display:none;margin-top:6px;font-size:10px;padding:3px 8px;border-radius:3px;width:fit-content"></div>
+        </div>
+    </div>
+
+    <!-- ===== FİLTRELER ===== -->
+    <div class="filter-row" id="filterRow" style="display:none">
+        <div class="filter-group">
+            <label>Göster:</label>
+            <select id="filterSelect" onchange="applyFilter()">
+                <option value="all">Tümü</option>
+                <option value="5">100 Puan (Mükemmel)</option>
+                <option value="4">70+ Puan (Güçlü)</option>
+                <option value="3">45+ Puan (Orta)</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>Ara:</label>
+            <input type="text" id="searchInput" placeholder="Hisse kodu..." oninput="applyFilter()">
+        </div>
+        <div class="filter-group">
+            <span class="result-count" id="resultCount"></span>
+        </div>
+    </div>
+
+    <!-- ===== ANA TABLO ===== -->
+    <main class="table-container" id="tableContainer">
+
+        <!-- Boş durum mesajı -->
+        <div class="empty-state" id="emptyState">
+            <div class="empty-icon">◈</div>
+            <h2>Tarama Başlatın</h2>
+            <p>Zaman dilimini seçin ve "Tara" butonuna basın.<br>
+               BIST100 hisselerinin tüm teknik koşulları analiz edilecek.</p>
+        </div>
+
+        <!-- Tablo (veriler gelince gösterilir) -->
+        <div id="tableWrapper" style="display:none">
+            <table class="scan-table">
+                <thead>
+                    <tr>
+                        <!-- Sıralama için her başlığa tıklanabilir -->
+                        <th class="col-symbol" onclick="sortBy('symbol')">
+                            Hisse <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-price" onclick="sortBy('currentPrice')">
+                            Fiyat <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-change" onclick="sortBy('changePercent')">
+                            Değişim <span class="sort-icon">⇅</span>
+                        </th>
+
+                        <!-- Koşul kolonları: ✓ veya ✗ — özel tooltip ile -->
+                        <th class="col-condition has-tooltip" data-tooltip="Fiyat, son swing'in %61.8–%65 geri çekilme bölgesinde mi? Profesyonel trader'ların en çok izlediği giriş bölgesi. (35 puan)">
+                            <div class="th-label">Fib</div>
+                            <div class="th-sub">Golden Pocket</div>
+                        </th>
+                        <th class="col-condition has-tooltip" data-tooltip="EMA20, EMA50'nin üzerinde mi? Kısa vadeli trendin orta vadeli trendden güçlü olduğunu, yükseliş momentumunu gösterir. (20 puan)">
+                            <div class="th-label">EMA</div>
+                            <div class="th-sub">20 > 50</div>
+                        </th>
+                        <th class="col-condition has-tooltip" data-tooltip="MACD çizgisi, sinyal çizgisini yukarı kesti mi? Klasik bir alım sinyali, momentum değişiminin başlangıcını gösterir. (20 puan)">
+                            <div class="th-label">MACD</div>
+                            <div class="th-sub">Crossover</div>
+                        </th>
+                        <th class="col-condition has-tooltip" data-tooltip="RSI 50 ile 70 arasında mı? 50 üzeri yükseliş momentumu, 70 altı henüz aşırı alım bölgesine girmediğini gösterir. (10 puan)">
+                            <div class="th-label">RSI</div>
+                            <div class="th-sub">50–70</div>
+                        </th>
+                        <th class="col-condition has-tooltip" data-tooltip="Bugünkü hacim, son 20 günlük ortalamanın 1.2 katından fazla mı? Kurumsal ilgi veya önemli bir hareketin işareti olabilir. (15 puan)">
+                            <div class="th-label">Hacim</div>
+                            <div class="th-sub">Ort. Üzeri</div>
+                        </th>
+
+                        <!-- Detay değerler -->
+                        <th class="col-rsi has-tooltip" data-tooltip="RSI (Relative Strength Index) — fiyatın momentumunu 0-100 arası ölçer. 70 üzeri aşırı alım, 30 altı aşırı satım bölgesi sayılır." onclick="sortBy('rsi')">
+                            RSI <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-fib has-tooltip" data-tooltip="Fibonacci %61.8 geri çekilme seviyesi — Golden Pocket'ın üst sınırı.">
+                            Fib 61.8
+                        </th>
+                        <th class="col-volume has-tooltip" data-tooltip="Bugünkü işlem hacmi / son 20 günlük ortalama hacim. Yüksek oran, artan ilgiyi gösterir." onclick="sortBy('volume')">
+                            Hacim <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-ema200 has-tooltip" data-tooltip="EMA200 — yaklaşık 1 yıllık ana trend göstergesi. Fiyat EMA200 üzerindeyse hisse uzun vadeli yükseliş trendinde sayılır. Şu an puanlamaya dahil değil, bilgi amaçlıdır." onclick="sortBy('ema200')">
+                            EMA200 <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-adx has-tooltip" data-tooltip="ADX (Average Directional Index) — trendin gücünü ölçer (yönünü değil). 25 üzeri güçlü/belirgin bir trend olduğunu gösterir, 20 altı ise fiyatın yatay/kararsız olduğunu. Şu an puanlamaya dahil değil, bilgi amaçlıdır." onclick="sortBy('adx')">
+                            ADX <span class="sort-icon">⇅</span>
+                        </th>
+                        <th class="col-score" onclick="sortBy('score')">
+                            Skor <span class="sort-icon">⇅</span>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody">
+                    <!-- JavaScript ile doldurulacak -->
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- ===== DETAY PANEL (Modal) ===== -->
+    <div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+        <div class="modal modal-wide" onclick="event.stopPropagation()">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+
+            <!-- Modal başlık satırı -->
+            <div class="modal-header">
+                <div>
+                    <div class="modal-symbol" id="modalSymbol">—</div>
+                    <div class="modal-name" id="modalName">—</div>
+                </div>
+                <div class="modal-price-block">
+                    <div class="modal-price" id="modalPrice">—</div>
+                    <div class="modal-change" id="modalChange">—</div>
+                </div>
+            </div>
+
+            <!-- Grafik interval butonları -->
+            <div class="chart-interval-row">
+                <button class="chart-btn" data-cinterval="1h"  onclick="loadChart(currentSymbol, '1h')">1S</button>
+                <button class="chart-btn active" data-cinterval="1d"  onclick="loadChart(currentSymbol, '1d')">1G</button>
+                <button class="chart-btn" data-cinterval="1wk" onclick="loadChart(currentSymbol, '1wk')">1H</button>
+                <button class="chart-btn" data-cinterval="1mo" onclick="loadChart(currentSymbol, '1mo')">1A</button>
+                <span class="chart-legend">
+                    <span class="legend-dot" style="background:#4fffb0"></span> EMA20
+                    <span class="legend-dot" style="background:#5b8dee;margin-left:8px"></span> EMA50
+                    <span class="legend-dot" style="background:rgba(255,209,102,0.7);margin-left:8px"></span> Fib
+                </span>
+            </div>
+
+            <!-- Grafik alanı -->
+            <div class="chart-wrapper">
+                <div id="chartContainer"></div>
+                <div id="chartLoading" class="chart-loading">
+                    <div class="spinner"></div> Grafik yükleniyor...
+                </div>
+            </div>
+
+            <!-- İndikatör detayları -->
+            <div id="modalContent"></div>
+        </div>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
