@@ -39,21 +39,21 @@
 
                 <!-- Export butonları (veriler gelince aktifleşir) -->
                 <div class="export-group" id="exportGroup" style="display:none">
-                    <button class="export-btn" onclick="exportExcel()" title="Excel olarak indir">
+                    <button class="export-btn" id="exportExcelBtn" title="Excel olarak indir">
                         📊 Excel
                     </button>
-                    <button class="export-btn" onclick="exportPDF()" title="PDF olarak indir">
+                    <button class="export-btn" id="exportPdfBtn" title="PDF olarak indir">
                         📄 PDF
                     </button>
                 </div>
 
                 <!-- Ayarlar butonu -->
-                <button class="settings-btn" onclick="toggleSettings()" title="API Ayarları">
+                <button class="settings-btn" id="settingsBtn" title="API Ayarları">
                     ⚙️
                 </button>
 
                 <!-- Tarama başlat butonu -->
-                <button class="scan-btn" id="scanBtn" onclick="startScan()">
+                <button class="scan-btn" id="scanBtn">
                     <span class="btn-icon">▶</span>
                     <span class="btn-text">Tara</span>
                 </button>
@@ -75,16 +75,16 @@
         <div class="api-warning-inner">
             <span>⚠️</span>
             <span id="apiWarningText"></span>
-            <button onclick="document.getElementById('apiWarning').style.display='none'">✕</button>
+            <button id="apiWarningCloseBtn">✕</button>
         </div>
     </div>
 
     <!-- ===== AYARLAR PANELİ ===== -->
-    <div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()">
-        <div class="settings-panel" onclick="event.stopPropagation()">
+    <div class="settings-overlay" id="settingsOverlay">
+        <div class="settings-panel">
             <div class="settings-header">
                 <h3>⚙️ API Ayarları</h3>
-                <button class="modal-close" onclick="closeSettings()">✕</button>
+                <button class="modal-close" id="settingsCloseBtn">✕</button>
             </div>
 
             <div class="settings-body">
@@ -119,7 +119,7 @@
                     </label>
                     <input type="text" id="twelveApiKey" class="settings-input"
                            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                           oninput="saveSettings()">
+                          >
                     <div class="settings-hint">
                         Key tarayıcınızda saklanır, sunucuya gönderilmez. Limit aşılırsa otomatik Yahoo'ya geçilir.
                     </div>
@@ -128,7 +128,7 @@
 
             <div class="settings-footer">
                 <div class="api-badge" id="currentApiBadge">Yahoo Finance aktif</div>
-                <button class="scan-btn" onclick="closeSettings()">Tamam</button>
+                <button class="scan-btn" id="settingsOkBtn">Tamam</button>
             </div>
         </div>
     </div>
@@ -158,7 +158,7 @@
     <div class="filter-row" id="filterRow" style="display:none">
         <div class="filter-group">
             <label>Göster:</label>
-            <select id="filterSelect" onchange="applyFilter()">
+            <select id="filterSelect">
                 <option value="all">Tümü</option>
                 <option value="5">100 Puan (Mükemmel)</option>
                 <option value="4">70+ Puan (Güçlü)</option>
@@ -167,7 +167,7 @@
         </div>
         <div class="filter-group">
             <label>Ara:</label>
-            <input type="text" id="searchInput" placeholder="Hisse kodu..." oninput="applyFilter()">
+            <input type="text" id="searchInput" placeholder="Hisse kodu...">
         </div>
         <div class="filter-group">
             <span class="result-count" id="resultCount"></span>
@@ -191,13 +191,13 @@
                 <thead>
                     <tr>
                         <!-- Sıralama için her başlığa tıklanabilir -->
-                        <th class="col-symbol" onclick="sortBy('symbol')">
+                        <th class="col-symbol" data-sort="symbol">
                             Hisse <span class="sort-icon">⇅</span>
                         </th>
-                        <th class="col-price" onclick="sortBy('currentPrice')">
+                        <th class="col-price" data-sort="currentPrice">
                             Fiyat <span class="sort-icon">⇅</span>
                         </th>
-                        <th class="col-change" onclick="sortBy('changePercent')">
+                        <th class="col-change" data-sort="changePercent">
                             Değişim <span class="sort-icon">⇅</span>
                         </th>
 
@@ -224,22 +224,22 @@
                         </th>
 
                         <!-- Detay değerler -->
-                        <th class="col-rsi has-tooltip" data-tooltip="RSI (Relative Strength Index) — fiyatın momentumunu 0-100 arası ölçer. 70 üzeri aşırı alım, 30 altı aşırı satım bölgesi sayılır." onclick="sortBy('rsi')">
+                        <th class="col-rsi has-tooltip" data-tooltip="RSI (Relative Strength Index) — fiyatın momentumunu 0-100 arası ölçer. 70 üzeri aşırı alım, 30 altı aşırı satım bölgesi sayılır." data-sort="rsi">
                             RSI <span class="sort-icon">⇅</span>
                         </th>
                         <th class="col-fib has-tooltip" data-tooltip="Fibonacci %61.8 geri çekilme seviyesi — Golden Pocket'ın üst sınırı.">
                             Fib 61.8
                         </th>
-                        <th class="col-volume has-tooltip" data-tooltip="Bugünkü işlem hacmi / son 20 günlük ortalama hacim. Yüksek oran, artan ilgiyi gösterir." onclick="sortBy('volume')">
+                        <th class="col-volume has-tooltip" data-tooltip="Bugünkü işlem hacmi / son 20 günlük ortalama hacim. Yüksek oran, artan ilgiyi gösterir." data-sort="volume">
                             Hacim <span class="sort-icon">⇅</span>
                         </th>
-                        <th class="col-ema200 has-tooltip" data-tooltip="EMA200 — yaklaşık 1 yıllık ana trend göstergesi. Fiyat EMA200 üzerindeyse hisse uzun vadeli yükseliş trendinde sayılır. Şu an puanlamaya dahil değil, bilgi amaçlıdır." onclick="sortBy('ema200')">
+                        <th class="col-ema200 has-tooltip" data-tooltip="EMA200 — yaklaşık 1 yıllık ana trend göstergesi. Fiyat EMA200 üzerindeyse hisse uzun vadeli yükseliş trendinde sayılır. Şu an puanlamaya dahil değil, bilgi amaçlıdır." data-sort="ema200">
                             EMA200 <span class="sort-icon">⇅</span>
                         </th>
-                        <th class="col-adx has-tooltip" data-tooltip="ADX (Average Directional Index) — trendin gücünü ölçer (yönünü değil). 25 üzeri güçlü/belirgin bir trend olduğunu gösterir, 20 altı ise fiyatın yatay/kararsız olduğunu. Şu an puanlamaya dahil değil, bilgi amaçlıdır." onclick="sortBy('adx')">
+                        <th class="col-adx has-tooltip" data-tooltip="ADX (Average Directional Index) — trendin gücünü ölçer (yönünü değil). 25 üzeri güçlü/belirgin bir trend olduğunu gösterir, 20 altı ise fiyatın yatay/kararsız olduğunu. Şu an puanlamaya dahil değil, bilgi amaçlıdır." data-sort="adx">
                             ADX <span class="sort-icon">⇅</span>
                         </th>
-                        <th class="col-score" onclick="sortBy('score')">
+                        <th class="col-score" data-sort="score">
                             Skor <span class="sort-icon">⇅</span>
                         </th>
                     </tr>
@@ -252,9 +252,9 @@
     </main>
 
     <!-- ===== DETAY PANEL (Modal) ===== -->
-    <div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
-        <div class="modal modal-wide" onclick="event.stopPropagation()">
-            <button class="modal-close" onclick="closeModal()">✕</button>
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal modal-wide">
+            <button class="modal-close" id="modalCloseBtn">✕</button>
 
             <!-- Modal başlık satırı -->
             <div class="modal-header">
@@ -270,10 +270,10 @@
 
             <!-- Grafik interval butonları -->
             <div class="chart-interval-row">
-                <button class="chart-btn" data-cinterval="1h"  onclick="loadChart(currentSymbol, '1h')">1S</button>
-                <button class="chart-btn active" data-cinterval="1d"  onclick="loadChart(currentSymbol, '1d')">1G</button>
-                <button class="chart-btn" data-cinterval="1wk" onclick="loadChart(currentSymbol, '1wk')">1H</button>
-                <button class="chart-btn" data-cinterval="1mo" onclick="loadChart(currentSymbol, '1mo')">1A</button>
+                <button class="chart-btn" data-cinterval="1h" >1S</button>
+                <button class="chart-btn active" data-cinterval="1d" >1G</button>
+                <button class="chart-btn" data-cinterval="1wk">1H</button>
+                <button class="chart-btn" data-cinterval="1mo">1A</button>
                 <span class="chart-legend">
                     <span class="legend-dot" style="background:#4fffb0"></span> EMA20
                     <span class="legend-dot" style="background:#5b8dee;margin-left:8px"></span> EMA50
@@ -294,6 +294,6 @@
         </div>
     </div>
 
-    <script src="/js/app.js"></script>
+    <script type="module" src="/js/main.js"></script>
 </body>
 </html>

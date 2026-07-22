@@ -1,15 +1,21 @@
 // Services/IndicatorService.cs
-// EMA, MACD, RSI, Fibonacci, Hacim hesaplar
-// Skender.Stock.Indicators kütüphanesini kullanır
+// EMA, ADX, MACD, RSI, Fibonacci, Hacim DEĞERLERİNİ ve koşul bayraklarını hesaplar.
+// Skender.Stock.Indicators kütüphanesini kullanır.
+//
+// DEĞİŞİKLİK: Puanlama (Score/ConditionsMet) artık burada DEĞİL —
+// ScoringEngine'de. Bu sınıfın tek sorumluluğu indikatör hesabıdır
+// (Single Responsibility). Kural eşikleri (RSI 50-70, hacim 1.2x vb.)
+// serilere erişim gerektirdiği için koşul bayrakları burada hesaplanır;
+// ağırlıklandırma Scoring katmanındadır.
 
 using Skender.Stock.Indicators;
+using Bist100Scanner.Abstractions;
 using Bist100Scanner.Models;
 
 namespace Bist100Scanner.Services
 {
-    public class IndicatorService
+    public class IndicatorService : IIndicatorService
     {
-        // Ana metod: OHLCV verisinden tüm indikatörleri hesaplar
         public void Calculate(List<OhlcvData> data, StockSignal signal)
         {
             if (data.Count < 60)
@@ -35,33 +41,10 @@ namespace Bist100Scanner.Services
             CalculateRsi(quotes, signal);
             CalculateVolume(data, signal);
             CalculateFibonacci(data, signal);
-
-            // Kaç koşul sağlandı (filtreleme için)
-            signal.ConditionsMet =
-                (signal.EmaCondition     ? 1 : 0) +
-                (signal.MacdCrossover    ? 1 : 0) +
-                (signal.RsiCondition     ? 1 : 0) +
-                (signal.VolumeCondition  ? 1 : 0) +
-                (signal.IsInGoldenPocket ? 1 : 0);
-
-            signal.AllConditionsMet = signal.ConditionsMet == 5;
-
-            // Ağırlıklı 100 üzerinden puan:
-            // Fibonacci G.P.   → 35 (profesyonellerin en çok izlediği giriş bölgesi)
-            // EMA20 > EMA50    → 20 (trend yönü)
-            // MACD Crossover   → 20 (momentum tetikleyici)
-            // Hacim filtresi   → 15 (hareketin gerçekliği)
-            // RSI 50-70        → 10 (momentum doğrulama)
-            signal.Score =
-                (signal.IsInGoldenPocket ? 35 : 0) +
-                (signal.EmaCondition     ? 20 : 0) +
-                (signal.MacdCrossover    ? 20 : 0) +
-                (signal.VolumeCondition  ? 15 : 0) +
-                (signal.RsiCondition     ? 10 : 0);
         }
 
         // EMA20 > EMA50 → kısa vadeli trend yukarı
-        private void CalculateEma(List<Quote> quotes, StockSignal signal)
+        private static void CalculateEma(List<Quote> quotes, StockSignal signal)
         {
             var ema20  = quotes.GetEma(20).ToList();
             var ema50  = quotes.GetEma(50).ToList();
@@ -86,10 +69,9 @@ namespace Bist100Scanner.Services
         }
 
         // ADX: trendin gücünü ölçer (yön değil, güç)
-        // ADX > 25: güçlü/belirgin trend var
-        // ADX < 20: trend yok, fiyat yatay/kararsız
+        // ADX > 25: güçlü/belirgin trend var, < 20: yatay/kararsız
         // Sadece bilgi amaçlı — puanlamaya dahil değil
-        private void CalculateAdx(List<Quote> quotes, StockSignal signal)
+        private static void CalculateAdx(List<Quote> quotes, StockSignal signal)
         {
             var adx  = quotes.GetAdx(14).ToList();
             var last = adx.LastOrDefault(x => x.Adx.HasValue);
@@ -99,18 +81,18 @@ namespace Bist100Scanner.Services
         }
 
         // MACD bullish crossover: MACD line, signal line'ı aşağıdan yukarı geçti mi?
-        private void CalculateMacd(List<Quote> quotes, StockSignal signal)
+        private static void CalculateMacd(List<Quote> quotes, StockSignal signal)
         {
-            var macd   = quotes.GetMacd(12, 26, 9).ToList();
-            var valid  = macd.Where(x => x.Macd.HasValue && x.Signal.HasValue).ToList();
+            var macd  = quotes.GetMacd(12, 26, 9).ToList();
+            var valid = macd.Where(x => x.Macd.HasValue && x.Signal.HasValue).ToList();
 
             if (valid.Count < 2) return;
 
             var last = valid[^1];
             var prev = valid[^2];
 
-            signal.MacdLine      = Math.Round((double)last.Macd!,      4);
-            signal.MacdSignal    = Math.Round((double)last.Signal!,     4);
+            signal.MacdLine      = Math.Round((double)last.Macd!,           4);
+            signal.MacdSignal    = Math.Round((double)last.Signal!,         4);
             signal.MacdHistogram = Math.Round((double)(last.Histogram ?? 0), 4);
 
             // Crossover: önceki barda MACD < Signal, şimdi MACD > Signal
@@ -118,29 +100,29 @@ namespace Bist100Scanner.Services
         }
 
         // RSI 50-70: momentum yükseliş yönünde, henüz aşırı alım bölgesinde değil
-        private void CalculateRsi(List<Quote> quotes, StockSignal signal)
+        private static void CalculateRsi(List<Quote> quotes, StockSignal signal)
         {
             var rsi  = quotes.GetRsi(14).ToList();
             var last = rsi.LastOrDefault(x => x.Rsi.HasValue);
 
             if (last?.Rsi == null) return;
 
-            signal.Rsi         = Math.Round((double)last.Rsi, 2);
+            signal.Rsi          = Math.Round((double)last.Rsi, 2);
             signal.RsiCondition = signal.Rsi >= 50 && signal.Rsi <= 70;
         }
 
-        // Hacim: son bar ortalamanın %20 üzerinde mi?
-        private void CalculateVolume(List<OhlcvData> data, StockSignal signal)
+        // Hacim: son bar, 20 günlük ortalamanın %20 üzerinde mi?
+        private static void CalculateVolume(List<OhlcvData> data, StockSignal signal)
         {
             if (data.Count < 20) return;
 
-            signal.Volume        = data[^1].Volume;
-            signal.AverageVolume = (long)data.TakeLast(20).Average(d => d.Volume);
+            signal.Volume          = data[^1].Volume;
+            signal.AverageVolume   = (long)data.TakeLast(20).Average(d => d.Volume);
             signal.VolumeCondition = signal.Volume > signal.AverageVolume * 1.2;
         }
 
         // Fibonacci: son 50 barın swing high/low'undan golden pocket hesapla
-        private void CalculateFibonacci(List<OhlcvData> data, StockSignal signal)
+        private static void CalculateFibonacci(List<OhlcvData> data, StockSignal signal)
         {
             var recent = data.TakeLast(50).ToList();
 
