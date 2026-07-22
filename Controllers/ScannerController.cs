@@ -1,12 +1,13 @@
 // Controllers/ScannerController.cs
+// Sadece HTTP katmanı: istek al → cache kontrol → orkestratöre delege et →
+// yanıtı biçimlendir. İş mantığı içermez.
+// Tüm bağımlılıklar interface üzerinden — somut servis sınıfı tanımaz.
 
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Skender.Stock.Indicators;
+using Bist100Scanner.Abstractions;
 using Bist100Scanner.Models;
-using Bist100Scanner.Services;
-using static Bist100Scanner.Services.ScannerService;
 
 namespace Bist100Scanner.Controllers
 {
@@ -14,11 +15,10 @@ namespace Bist100Scanner.Controllers
     [Route("api/[controller]")]
     public class ScannerController : ControllerBase
     {
-        private readonly ScannerService      _scannerService;
-        private readonly BistSymbolService   _symbolService;
-        private readonly YahooFinanceService _yahooService;
-        private readonly IndicatorService    _indicatorService;
-        private readonly IMemoryCache        _cache;
+        private readonly IScanOrchestrator _orchestrator;
+        private readonly ISymbolProvider   _symbolProvider;
+        private readonly IMarketDataChain  _marketData;
+        private readonly ICacheService     _cache;
         private readonly ILogger<ScannerController> _logger;
 
         private static string ScanCacheKey(string interval, string source) =>
@@ -26,19 +26,17 @@ namespace Bist100Scanner.Controllers
         private static readonly TimeSpan ScanCacheDuration = TimeSpan.FromHours(2);
 
         public ScannerController(
-            ScannerService scannerService,
-            BistSymbolService symbolService,
-            YahooFinanceService yahooService,
-            IndicatorService indicatorService,
-            IMemoryCache cache,
+            IScanOrchestrator orchestrator,
+            ISymbolProvider symbolProvider,
+            IMarketDataChain marketData,
+            ICacheService cache,
             ILogger<ScannerController> logger)
         {
-            _scannerService   = scannerService;
-            _symbolService    = symbolService;
-            _yahooService     = yahooService;
-            _indicatorService = indicatorService;
-            _cache            = cache;
-            _logger           = logger;
+            _orchestrator   = orchestrator;
+            _symbolProvider = symbolProvider;
+            _marketData     = marketData;
+            _cache          = cache;
+            _logger         = logger;
         }
 
         // POST /api/scanner/scan
@@ -56,7 +54,7 @@ namespace Bist100Scanner.Controllers
 
                 var cacheKey = ScanCacheKey(yahooInterval, request.ApiSource);
 
-                if (_cache.TryGetValue(cacheKey, out CachedScanResult? cached) && cached != null)
+                if (_cache.TryGet(cacheKey, out CachedScanResult? cached) && cached != null)
                 {
                     return Ok(new
                     {
@@ -71,41 +69,95 @@ namespace Bist100Scanner.Controllers
                     });
                 }
 
-                var (results, apiUsed, warning) = await _scannerService.ScanAllAsync(
+                var outcome = await _orchestrator.ScanAllAsync(
                     yahooInterval, request.ApiSource, request.TwelveApiKey);
 
                 var scannedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm");
 
                 var entry = new CachedScanResult
                 {
-                    Data      = results,
+                    Data      = outcome.Results,
                     ScannedAt = scannedAt,
                     ExpiresAt = DateTime.Now.Add(ScanCacheDuration),
-                    ApiUsed   = apiUsed,
-                    Warning   = warning
+                    ApiUsed   = outcome.ApiUsed,
+                    Warning   = outcome.Warning
                 };
 
-                _cache.Set(cacheKey, entry, new MemoryCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = ScanCacheDuration,
-                    Size = 1
-                });
+                _cache.Set(cacheKey, entry, ScanCacheDuration);
 
                 return Ok(new
                 {
                     success        = true,
-                    count          = results.Count,
-                    data           = results,
+                    count          = outcome.Results.Count,
+                    data           = outcome.Results,
                     scannedAt,
                     fromCache      = false,
                     cacheExpiresAt = entry.ExpiresAt.ToString("HH:mm"),
-                    apiUsed,
-                    warning
+                    apiUsed        = outcome.ApiUsed,
+                    warning        = outcome.Warning
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Tarama hatası");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // POST /api/scanner/confluence
+        // Haftalık + Günlük çift tarama — confluence analizi
+        [HttpPost("confluence")]
+        public async Task<IActionResult> Confluence([FromBody] ScanRequest request)
+        {
+            try
+            {
+                var cacheKey = $"confluence:{request.ApiSource}";
+
+                if (_cache.TryGet(cacheKey, out CachedConfluenceResult? cached) && cached != null)
+                {
+                    return Ok(new
+                    {
+                        success        = true,
+                        count          = cached.Data.Count,
+                        data           = cached.Data,
+                        scannedAt      = cached.ScannedAt,
+                        fromCache      = true,
+                        cacheExpiresAt = cached.ExpiresAt.ToString("HH:mm"),
+                        apiUsed        = cached.ApiUsed,
+                        warning        = cached.Warning
+                    });
+                }
+
+                var outcome = await _orchestrator.ScanConfluenceAsync(
+                    request.ApiSource, request.TwelveApiKey);
+
+                var scannedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm");
+                var entry = new CachedConfluenceResult
+                {
+                    Data      = outcome.Results,
+                    ScannedAt = scannedAt,
+                    ExpiresAt = DateTime.Now.Add(ScanCacheDuration),
+                    ApiUsed   = outcome.ApiUsed,
+                    Warning   = outcome.Warning
+                };
+
+                _cache.Set(cacheKey, entry, ScanCacheDuration);
+
+                return Ok(new
+                {
+                    success        = true,
+                    count          = outcome.Results.Count,
+                    data           = outcome.Results,
+                    scannedAt,
+                    fromCache      = false,
+                    cacheExpiresAt = entry.ExpiresAt.ToString("HH:mm"),
+                    apiUsed        = outcome.ApiUsed,
+                    warning        = outcome.Warning
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Confluence tarama hatası");
                 return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
@@ -122,9 +174,14 @@ namespace Bist100Scanner.Controllers
                 var fullSymbol = symbol.EndsWith(".IS") ? symbol : $"{symbol}.IS";
                 if (interval == "1h") days = 59;
 
-                var data = await _yahooService.GetHistoricalDataAsync(fullSymbol, interval, days);
-                if (data.Count == 0)
+                // Grafik her zaman Yahoo'dan gelir (saatlik interval desteği için)
+                var context = new ScanContext(interval, days, 500, "yahoo", null);
+                var fetch   = await _marketData.GetHistoricalDataAsync(fullSymbol, context);
+
+                if (!fetch.Success || fetch.Data.Count == 0)
                     return NotFound(new { message = "Veri bulunamadı" });
+
+                var data = fetch.Data;
 
                 var quotes = data.Select(d => new Quote
                 {
@@ -196,7 +253,7 @@ namespace Bist100Scanner.Controllers
         [HttpGet("symbols")]
         public async Task<IActionResult> GetSymbols()
         {
-            var symbols = await _symbolService.GetAllSymbolsAsync();
+            var symbols = await _symbolProvider.GetAllSymbolsAsync();
             return Ok(symbols.Select(s => new
             {
                 symbol = s.Symbol.Replace(".IS", ""),
@@ -204,73 +261,11 @@ namespace Bist100Scanner.Controllers
             }));
         }
 
-        // POST /api/scanner/confluence
-        // Haftalık + Günlük çift tarama — confluence analizi
-        [HttpPost("confluence")]
-        public async Task<IActionResult> Confluence([FromBody] ScanRequest request)
-        {
-            try
-            {
-                var cacheKey = $"confluence:{request.ApiSource}";
-
-                if (_cache.TryGetValue(cacheKey, out CachedConfluenceResult? cached) && cached != null)
-                {
-                    return Ok(new
-                    {
-                        success        = true,
-                        count          = cached.Data.Count,
-                        data           = cached.Data,
-                        scannedAt      = cached.ScannedAt,
-                        fromCache      = true,
-                        cacheExpiresAt = cached.ExpiresAt.ToString("HH:mm"),
-                        apiUsed        = cached.ApiUsed,
-                        warning        = cached.Warning
-                    });
-                }
-
-                var (results, apiUsed, warning) = await _scannerService.ScanConfluenceAsync(
-                    request.ApiSource, request.TwelveApiKey);
-
-                var scannedAt = DateTime.Now.ToString("dd.MM.yyyy HH:mm");
-                var entry = new CachedConfluenceResult
-                {
-                    Data      = results,
-                    ScannedAt = scannedAt,
-                    ExpiresAt = DateTime.Now.AddHours(2),
-                    ApiUsed   = apiUsed,
-                    Warning   = warning
-                };
-
-                _cache.Set(cacheKey, entry, new MemoryCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(2),
-                    Size = 1
-                });
-
-                return Ok(new
-                {
-                    success        = true,
-                    count          = results.Count,
-                    data           = results,
-                    scannedAt,
-                    fromCache      = false,
-                    cacheExpiresAt = entry.ExpiresAt.ToString("HH:mm"),
-                    apiUsed,
-                    warning
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Confluence tarama hatası");
-                return StatusCode(500, new { success = false, message = ex.Message });
-            }
-        }
-
         // GET /api/scanner/symbol-stats
         [HttpGet("symbol-stats")]
         public async Task<IActionResult> GetSymbolStats()
         {
-            var symbols = await _symbolService.GetAllSymbolsAsync();
+            var symbols = await _symbolProvider.GetAllSymbolsAsync();
             return Ok(new
             {
                 total   = symbols.Count,
@@ -291,7 +286,7 @@ namespace Bist100Scanner.Controllers
                 sources.Select(source =>
                 {
                     var key    = ScanCacheKey(interval, source);
-                    var exists = _cache.TryGetValue(key, out CachedScanResult? entry);
+                    var exists = _cache.TryGet(key, out CachedScanResult? entry);
                     return new
                     {
                         interval, source,
@@ -304,23 +299,5 @@ namespace Bist100Scanner.Controllers
             );
             return Ok(status);
         }
-    }
-
-    public class CachedScanResult
-    {
-        public List<StockSignal> Data      { get; set; } = new();
-        public string            ScannedAt { get; set; } = "";
-        public DateTime          ExpiresAt { get; set; }
-        public string            ApiUsed   { get; set; } = "yahoo";
-        public string?           Warning   { get; set; }
-    }
-
-    public class CachedConfluenceResult
-    {
-        public List<ConfluenceSignal> Data      { get; set; } = new();
-        public string                 ScannedAt { get; set; } = "";
-        public DateTime               ExpiresAt { get; set; }
-        public string                 ApiUsed   { get; set; } = "yahoo";
-        public string?                Warning   { get; set; }
     }
 }
